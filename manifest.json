@@ -1,0 +1,16 @@
+{
+  "name": "你的应用名称",
+  "appid": "wx3633f5c1b7c84ba8",
+  "mp-weixin": {
+    "appid": "touristappid",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "postcss": true,
+      "minified": true
+    },
+    "usingComponents": true,
+    "permission": {},
+    "requiredPrivateInfos": []
+  }
+}
