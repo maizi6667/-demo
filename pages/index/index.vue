@@ -195,11 +195,18 @@ export default {
     },
 
     // ── 弹窗 ──────────────────────────────────────
-    openApply(tripId, nickname, route) {
-      this.currentTrip = { tripId, nickname, route }
-      this.applyMessage = ''
-      this.showModal = true
-    },
+   openApply(tripId, nickname, route) {
+  // 从 latestTrips 中找到对应的行程数据
+  const trip = this.latestTrips.find(t => t.tripId === tripId)
+  this.currentTrip = { 
+    tripId, 
+    nickname, 
+    route,
+    tripDriverTripId: trip ? trip.tripDriverTripId : null  // ✅ 添加这个字段
+  }
+  this.applyMessage = ''
+  this.showModal = true
+},
 
     closeModal() {
       this.showModal = false
@@ -223,7 +230,8 @@ export default {
           tripId: this.currentTrip.tripId,
           userId: Number(userId),
           status: 0,
-          message: this.applyMessage.trim()
+          message: this.applyMessage.trim(),
+          tripDriverTripId:this.currentTrip.tripDriverTripId
         }
       }).then(() => {
         this.closeModal()
@@ -256,50 +264,51 @@ export default {
     },
 
     getLatestTrips() {
-      this.loading = true
-      request({ url: '/carpool/routes/latest', method: 'GET' })
-        .then(res => {
-          if (res.code === 0 && Array.isArray(res.data)) {
-            this.latestTrips = res.data.map(item => {
-              let departTimeDisplay = ''
-              if (item.departTime) {
-                const date = new Date(item.departTime)
-                const now  = new Date()
-                const today      = new Date(now.getFullYear(),  now.getMonth(),  now.getDate())
-                const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
-                const timeStr = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-                if (targetDate.getTime() === today.getTime()) {
-                  departTimeDisplay = `今天 ${timeStr} 出发`
-                } else if (targetDate.getTime() === today.getTime() + 86400000) {
-                  departTimeDisplay = `明天 ${timeStr} 出发`
-                } else {
-                  departTimeDisplay = `${date.getMonth() + 1}月${date.getDate()}日 ${timeStr} 出发`
-                }
-              }
-              return {
-                tripId: item.tripId || item.id,
-                userName: item.userName,
-                startPlace: item.startPlace,
-                endPlace: item.endPlace,
-                departTimeDisplay,
-                seatCount: item.seatCount,
-                avatar: item.image || 'https://randomuser.me/api/portraits/lego/1.jpg',
-                tag: '实名认证'
-              }
-            })
-          } else {
-            this.latestTrips = []
+  this.loading = true
+  request({ url: '/carpool/routes/latest', method: 'GET' })
+    .then(res => {
+      if (res.code === 0 && Array.isArray(res.data)) {
+        this.latestTrips = res.data.map(item => {
+          let departTimeDisplay = ''
+          if (item.departTime) {
+            const date = new Date(item.departTime)
+            const now  = new Date()
+            const today      = new Date(now.getFullYear(),  now.getMonth(),  now.getDate())
+            const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+            const timeStr = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+            if (targetDate.getTime() === today.getTime()) {
+              departTimeDisplay = `今天 ${timeStr} 出发`
+            } else if (targetDate.getTime() === today.getTime() + 86400000) {
+              departTimeDisplay = `明天 ${timeStr} 出发`
+            } else {
+              departTimeDisplay = `${date.getMonth() + 1}月${date.getDate()}日 ${timeStr} 出发`
+            }
+          }
+          return {
+            tripId: item.tripId || item.id,
+            tripDriverTripId: item.tripDriverTripId, // ✅ 添加这个字段
+            userName: item.userName,
+            startPlace: item.startPlace,
+            endPlace: item.endPlace,
+            departTimeDisplay,
+            seatCount: item.seatCount,
+            avatar: item.image || 'https://randomuser.me/api/portraits/lego/1.jpg',
+            tag: '实名认证'
           }
         })
-        .catch(err => {
-          console.error('获取最新行程失败:', err)
-          uni.showToast({ title: '获取行程失败', icon: 'none' })
-          this.latestTrips = []
-        })
-        .finally(() => {
-          this.loading = false
-        })
-    }
+      } else {
+        this.latestTrips = []
+      }
+    })
+    .catch(err => {
+      console.error('获取最新行程失败:', err)
+      uni.showToast({ title: '获取行程失败', icon: 'none' })
+      this.latestTrips = []
+    })
+    .finally(() => {
+      this.loading = false
+    })
+}
   }
 }
 </script>

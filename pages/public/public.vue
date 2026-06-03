@@ -397,7 +397,7 @@ export default {
       
       // 组装数据，字段名与后端 TripSaveReqVO 完全对应
       const requestData = {
-        userId: Number(userId),
+       driverId : Number(userId),
         startPlace: this.formData.startPlace.trim(),
         endPlace: this.formData.endPlace.trim(),
         departTime: this.formData.departTime,
