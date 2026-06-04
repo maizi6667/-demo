@@ -39,6 +39,31 @@
       </view>
     </view>
 
+    <!-- WebSocket 测试区域 - 新增 -->
+    <view class="section" v-if="showWsTest">
+      <view class="section-header">
+        <text class="title">🔌 WebSocket 测试</text>
+      </view>
+      <view class="ws-test-card">
+        <view class="ws-status">
+          <text>连接状态：</text>
+          <text :class="wsConnected ? 'status-connected' : 'status-disconnected'">
+            {{ wsConnected ? '已连接' : '未连接' }}
+          </text>
+        </view>
+        <view class="ws-message-list" v-if="wsMessages.length">
+          <view class="ws-message-title">收到的消息：</view>
+          <view v-for="(msg, idx) in wsMessages" :key="idx" class="ws-message">
+            <text class="ws-msg-time">{{ msg.time }}</text>
+            <text class="ws-msg-content">{{ msg.content }}</text>
+          </view>
+        </view>
+        <button class="ws-test-btn" @click="sendTestMessage" :disabled="!wsConnected">
+          发送测试消息
+        </button>
+      </view>
+    </view>
+
     <!-- 热门路线 -->
     <view class="section">
       <view class="section-header">
@@ -140,6 +165,7 @@
 
 <script>
 import request from '@/utils/request.js'
+import { connect, onMessage, sendMessage, isConnected } from '@/utils/tripWebSocket.js'
 
 export default {
   data() {
@@ -150,7 +176,13 @@ export default {
       loading: false,
       currentTrip: { tripId: 0, nickname: '', route: '' },
       hotRoutes: [],
-      latestTrips: []
+      latestTrips: [],
+      // WebSocket 相关 - 新增
+      showWsTest: true,
+      wsConnected: false,
+      wsMessages: [],
+      wsStatusTimer: null,
+      unsubscribeList: []
     }
   },
 
@@ -162,9 +194,80 @@ export default {
     }
     this.getHotRoutes()
     this.getLatestTrips()
+    // 初始化 WebSocket - 新增
+    this.initWebSocket()
+  },
+
+  onUnload() {
+    // 清理 WebSocket 监听 - 新增
+    if (this.wsStatusTimer) {
+      clearInterval(this.wsStatusTimer)
+    }
+    this.unsubscribeList.forEach(unsubscribe => {
+      if (unsubscribe) unsubscribe()
+    })
   },
 
   methods: {
+    // WebSocket 相关方法 - 新增
+    initWebSocket() {
+      connect()
+      
+      // 监听连接状态
+      this.wsStatusTimer = setInterval(() => {
+        this.wsConnected = isConnected()
+      }, 1000)
+      
+      // 监听 ACK 消息
+      const unsubAck = onMessage('ACK', (msg) => {
+        console.log('收到 ACK:', msg)
+        this.addWsMessage('ACK', `连接确认: ${msg.status}`)
+      })
+      
+      // 监听行程发车消息
+      const unsubDeparture = onMessage('TRIP_DEPARTURE', (msg) => {
+        console.log('收到行程发车消息:', msg)
+        this.addWsMessage('TRIP_DEPARTURE', `行程 ${msg.tripId} 已发车`)
+      })
+      
+      // 监听行程到达消息
+      const unsubArrival = onMessage('TRIP_ARRIVAL', (msg) => {
+        console.log('收到行程到达消息:', msg)
+        this.addWsMessage('TRIP_ARRIVAL', `行程 ${msg.tripId} 已到达`)
+      })
+      
+      this.unsubscribeList = [unsubAck, unsubDeparture, unsubArrival]
+    },
+    
+    addWsMessage(type, content) {
+      const now = new Date()
+      const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+      this.wsMessages.unshift({ time, type, content })
+      if (this.wsMessages.length > 20) {
+        this.wsMessages.pop()
+      }
+    },
+    
+    sendTestMessage() {
+      if (!this.wsConnected) {
+        uni.showToast({ title: 'WebSocket未连接', icon: 'none' })
+        return
+      }
+      
+      const success = sendMessage('TEST_MESSAGE', {
+        content: 'Hello from 小程序!',
+        timestamp: Date.now(),
+        userId: uni.getStorageSync('userId')
+      })
+      
+      if (success) {
+        this.addWsMessage('SENT', '测试消息已发送')
+        uni.showToast({ title: '消息已发送', icon: 'success' })
+      } else {
+        uni.showToast({ title: '发送失败', icon: 'none' })
+      }
+    },
+
     // ── 跳转 ──────────────────────────────────────
     publishTrip() {
       uni.navigateTo({ url: '/pages/public/public' })
@@ -178,7 +281,6 @@ export default {
       uni.navigateTo({ url: '/pages/massage/massage' })
     },
 
-    // ✅ 新增：跳转到我的行程列表
     goMyTrips() {
       uni.navigateTo({ url: '/pages/trip/trip-list' })
     },
@@ -195,18 +297,17 @@ export default {
     },
 
     // ── 弹窗 ──────────────────────────────────────
-   openApply(tripId, nickname, route) {
-  // 从 latestTrips 中找到对应的行程数据
-  const trip = this.latestTrips.find(t => t.tripId === tripId)
-  this.currentTrip = { 
-    tripId, 
-    nickname, 
-    route,
-    tripDriverTripId: trip ? trip.tripDriverTripId : null  // ✅ 添加这个字段
-  }
-  this.applyMessage = ''
-  this.showModal = true
-},
+    openApply(tripId, nickname, route) {
+      const trip = this.latestTrips.find(t => t.tripId === tripId)
+      this.currentTrip = { 
+        tripId, 
+        nickname, 
+        route,
+        tripDriverTripId: trip ? trip.tripDriverTripId : null
+      }
+      this.applyMessage = ''
+      this.showModal = true
+    },
 
     closeModal() {
       this.showModal = false
@@ -231,7 +332,7 @@ export default {
           userId: Number(userId),
           status: 0,
           message: this.applyMessage.trim(),
-          tripDriverTripId:this.currentTrip.tripDriverTripId
+          tripDriverTripId: this.currentTrip.tripDriverTripId
         }
       }).then(() => {
         this.closeModal()
@@ -264,51 +365,51 @@ export default {
     },
 
     getLatestTrips() {
-  this.loading = true
-  request({ url: '/carpool/routes/latest', method: 'GET' })
-    .then(res => {
-      if (res.code === 0 && Array.isArray(res.data)) {
-        this.latestTrips = res.data.map(item => {
-          let departTimeDisplay = ''
-          if (item.departTime) {
-            const date = new Date(item.departTime)
-            const now  = new Date()
-            const today      = new Date(now.getFullYear(),  now.getMonth(),  now.getDate())
-            const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
-            const timeStr = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-            if (targetDate.getTime() === today.getTime()) {
-              departTimeDisplay = `今天 ${timeStr} 出发`
-            } else if (targetDate.getTime() === today.getTime() + 86400000) {
-              departTimeDisplay = `明天 ${timeStr} 出发`
-            } else {
-              departTimeDisplay = `${date.getMonth() + 1}月${date.getDate()}日 ${timeStr} 出发`
-            }
-          }
-          return {
-            tripId: item.tripId || item.id,
-            tripDriverTripId: item.tripDriverTripId, // ✅ 添加这个字段
-            userName: item.userName,
-            startPlace: item.startPlace,
-            endPlace: item.endPlace,
-            departTimeDisplay,
-            seatCount: item.seatCount,
-            avatar: item.image || 'https://randomuser.me/api/portraits/lego/1.jpg',
-            tag: '实名认证'
+      this.loading = true
+      request({ url: '/carpool/routes/latest', method: 'GET' })
+        .then(res => {
+          if (res.code === 0 && Array.isArray(res.data)) {
+            this.latestTrips = res.data.map(item => {
+              let departTimeDisplay = ''
+              if (item.departTime) {
+                const date = new Date(item.departTime)
+                const now  = new Date()
+                const today      = new Date(now.getFullYear(),  now.getMonth(),  now.getDate())
+                const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+                const timeStr = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+                if (targetDate.getTime() === today.getTime()) {
+                  departTimeDisplay = `今天 ${timeStr} 出发`
+                } else if (targetDate.getTime() === today.getTime() + 86400000) {
+                  departTimeDisplay = `明天 ${timeStr} 出发`
+                } else {
+                  departTimeDisplay = `${date.getMonth() + 1}月${date.getDate()}日 ${timeStr} 出发`
+                }
+              }
+              return {
+                tripId: item.tripId || item.id,
+                tripDriverTripId: item.tripDriverTripId,
+                userName: item.userName,
+                startPlace: item.startPlace,
+                endPlace: item.endPlace,
+                departTimeDisplay,
+                seatCount: item.seatCount,
+                avatar: item.image || 'https://randomuser.me/api/portraits/lego/1.jpg',
+                tag: '实名认证'
+              }
+            })
+          } else {
+            this.latestTrips = []
           }
         })
-      } else {
-        this.latestTrips = []
-      }
-    })
-    .catch(err => {
-      console.error('获取最新行程失败:', err)
-      uni.showToast({ title: '获取行程失败', icon: 'none' })
-      this.latestTrips = []
-    })
-    .finally(() => {
-      this.loading = false
-    })
-}
+        .catch(err => {
+          console.error('获取最新行程失败:', err)
+          uni.showToast({ title: '获取行程失败', icon: 'none' })
+          this.latestTrips = []
+        })
+        .finally(() => {
+          this.loading = false
+        })
+    }
   }
 }
 </script>
@@ -367,4 +468,60 @@ export default {
 .btn-confirm { flex: 2; border: none; border-radius: 50rpx; height: 88rpx; line-height: 88rpx; font-size: 28rpx; font-weight: 500; background: #36c66d; color: #fff; text-align: center; }
 .btn-confirm[disabled] { background: #a8e6c1; }
 .loading-text, .empty-text { text-align: center; padding: 60rpx 0; color: #999; font-size: 28rpx; }
+
+/* WebSocket 测试区域样式 - 新增 */
+.ws-test-card {
+  background: #fff;
+  border-radius: 25rpx;
+  padding: 25rpx;
+}
+.ws-status {
+  font-size: 28rpx;
+  padding-bottom: 20rpx;
+  border-bottom: 1rpx solid #eee;
+}
+.status-connected {
+  color: #36c66d;
+  font-weight: bold;
+}
+.status-disconnected {
+  color: #ff6b6b;
+  font-weight: bold;
+}
+.ws-message-list {
+  margin-top: 20rpx;
+  max-height: 300rpx;
+  overflow-y: auto;
+}
+.ws-message-title {
+  font-size: 26rpx;
+  color: #999;
+  margin-bottom: 10rpx;
+}
+.ws-message {
+  background: #f5f7fb;
+  padding: 15rpx;
+  border-radius: 12rpx;
+  margin-bottom: 10rpx;
+}
+.ws-msg-time {
+  font-size: 22rpx;
+  color: #999;
+  margin-right: 15rpx;
+}
+.ws-msg-content {
+  font-size: 26rpx;
+  color: #333;
+}
+.ws-test-btn {
+  margin-top: 20rpx;
+  background: #36c66d;
+  color: #fff;
+  border-radius: 40rpx;
+  font-size: 28rpx;
+  padding: 20rpx;
+}
+.ws-test-btn[disabled] {
+  background: #ccc;
+}
 </style>

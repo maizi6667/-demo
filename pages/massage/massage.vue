@@ -19,6 +19,45 @@
     <scroll-view class="content" scroll-y>
       <!-- ========== 乘客视角 ========== -->
       <block v-if="!isDriver">
+        <!-- 实时消息卡片（新增） -->
+        <view class="card msg-card">
+          <view class="card-label">
+            <text class="label-icon">📨</text>
+            <text>实时消息</text>
+            <text class="badge" v-if="receivedMessages.length">{{ receivedMessages.length }}</text>
+          </view>
+          <view v-if="receivedMessages.length === 0" class="empty-msg">
+            <text>暂无接收到的消息</text>
+          </view>
+          <view v-else class="msg-list">
+            <view v-for="(item, idx) in receivedMessages" :key="idx" class="msg-item">
+              <view class="msg-header">
+                <text class="msg-type">{{ item.title }}</text>
+                <text class="msg-time">{{ item.time }}</text>
+              </view>
+              <view class="msg-body">
+                <view v-if="item.startPlace || item.endPlace" class="msg-row">
+                  <text class="label">📍 行程：</text>
+                  <text class="value">{{ item.startPlace || '?' }} → {{ item.endPlace || '?' }}</text>
+                </view>
+                <view v-if="item.departTime" class="msg-row">
+                  <text class="label">⏰ 出发时间：</text>
+                  <text class="value">{{ item.departTime }}</text>
+                </view>
+                <view v-if="item.message" class="msg-row">
+                  <text class="label">💬 留言：</text>
+                  <text class="value">{{ item.message }}</text>
+                </view>
+                <view v-if="item.extra" class="msg-row">
+                  <text class="label">📎 附加：</text>
+                  <text class="value">{{ item.extra }}</text>
+                </view>
+              </view>
+            </view>
+          </view>
+        </view>
+
+        <!-- 原有行程卡片 -->
         <view class="card route-card">
           <view class="card-label">当前行程</view>
           <view class="route-line">
@@ -85,6 +124,31 @@
 
       <!-- ========== 司机视角 ========== -->
       <view v-else class="driver-module">
+        <!-- WebSocket 测试卡片（司机专用） -->
+        <view class="card ws-test-card">
+          <view class="card-label">
+            <text class="label-icon">🔌</text>
+            <text>WebSocket 测试</text>
+          </view>
+          <view class="ws-status">
+            状态：<text :class="wsConnected ? 'status-on' : 'status-off'">
+              {{ wsConnected ? '已连接' : '未连接' }}
+            </text>
+          </view>
+          <button class="ws-btn" @click="sendTestMessage" :disabled="!wsConnected">
+            发送测试消息 (userId 146)
+          </button>
+          <view v-if="wsMessages.length" class="ws-log">
+            <view class="log-title">消息日志：</view>
+            <scroll-view scroll-y class="log-scroll">
+              <view v-for="(log, idx) in wsMessages" :key="idx" class="log-item">
+                <text class="log-time">{{ log.time }}</text>
+                <text class="log-content">{{ log.content }}</text>
+              </view>
+            </scroll-view>
+          </view>
+        </view>
+
         <view v-if="tripList.length === 0" class="empty-apply">
           <text class="empty-icon">🚗</text>
           <text class="empty-text">暂无行程</text>
@@ -125,6 +189,7 @@
                   v-for="consumer in trip.consumerList"
                   :key="consumer.id"
                   class="consumer-item"
+                  @click="openDriverFlow(trip.userGetMyTripList, consumer)"
                 >
                   <view class="consumer-header">
                     <text class="consumer-name">{{ consumer.username || ('乘客' + consumer.userId) }}</text>
@@ -166,10 +231,18 @@
                     <button class="action-btn reject" @click.stop="rejectConsumer(consumer, trip.userGetMyTripList.tripId)">拒绝</button>
                     <button class="action-btn approve" @click.stop="approveConsumer(consumer, trip.userGetMyTripList.tripId)">确认行程</button>
                   </view>
-                  <view class="apply-result" v-else-if="consumer.status === 1">
+                  <view class="apply-actions" v-else>
+                    <button
+                      class="action-btn approve"
+                      @click.stop="openDriverFlow(trip.userGetMyTripList, consumer)"
+                    >
+                      {{ trip.userGetMyTripList.status >= 4 ? '去到达确认' : '去出发确认' }}
+                    </button>
+                  </view>
+                  <view class="apply-result" v-if="consumer.status === 1">
                     <text class="result-text approved">✓ 已批准</text>
                   </view>
-                  <view class="apply-result" v-else-if="consumer.status === 2">
+                  <view class="apply-result" v-if="consumer.status === 2">
                     <text class="result-text rejected">✗ 已拒绝</text>
                   </view>
                 </view>
@@ -194,15 +267,16 @@
     </view>
   </view>
 </template>
+
 <script>
 import request from '@/utils/request.js'
+import { connect, onMessage, sendMessage, isConnected } from '@/utils/tripWebSocket.js'
 
 export default {
   data() {
     return {
-      activeRole: 'driver',          // 当前角色
-
-       expandedTrips: {},
+      activeRole: 'driver',
+      expandedTrips: {},
       // 乘客数据
       tripId: null,
       startPlace: '',
@@ -213,10 +287,16 @@ export default {
       canBoard: false,
       boardingConfirmed: false,
       // 司机数据
-      tripList: [],                  // 行程列表 { userGetMyTripList, consumerList }
+      tripList: [],
       // 通用
       sending: false,
-      loading: false
+      loading: false,
+      // WebSocket 相关
+      wsConnected: false,
+      wsMessages: [],        // 司机端调试日志
+      receivedMessages: [],  // 乘客端解析后的消息列表
+      unsubList: [],
+      wsStatusTimer: null
     }
   },
   watch: {
@@ -243,7 +323,6 @@ export default {
       return map[this.routeDetail.status] || 'pending'
     }
   },
-
   onLoad(options) {
     if (options.role === 'passenger') this.activeRole = 'passenger'
     else if (options.role === 'driver') this.activeRole = 'driver'
@@ -257,14 +336,154 @@ export default {
       this.routeDetail = { startPlace: this.startPlace, endPlace: this.endPlace, driverName: this.driverName }
     }
 
+    this.initWebSocket()
     this.loadData()
   },
+  onUnload() {
+    if (this.wsStatusTimer) clearInterval(this.wsStatusTimer)
+    this.unsubList.forEach(unsub => unsub && unsub())
+  },
+  methods: {
+    // ========== WebSocket 方法 ==========
+    initWebSocket() {
+      const token = uni.getStorageSync('accessToken')
+      if (!token) {
+        console.warn('[WS] 未登录，跳过初始化')
+        return
+      }
+      connect()
 
-  methods: {toggleTrip(tripId) {
-  // Vue 2 响应式：需用 $set 才能动态新增属性
-  const current = this.expandedTrips[tripId]
-  this.$set(this.expandedTrips, tripId, !current)
-},
+      this.wsStatusTimer = setInterval(() => {
+        this.wsConnected = isConnected()
+      }, 1000)
+
+      this.unsubList = []
+
+      // 监听所有消息，统一解析并存入 receivedMessages（供乘客视角展示）
+      this.unsubList.push(onMessage('*', (msg) => {
+        console.log('[WS] 收到消息:', msg)
+        this.parseAndAddMessage(msg)
+      }))
+
+      // 司机视角的调试日志（不影响乘客消息展示）
+      this.unsubList.push(onMessage('TEST_REPLY', (msg) => {
+        this.addWsLog(`✅ 后端回复: ${msg.data?.msg || JSON.stringify(msg)}`)
+      }))
+      this.unsubList.push(onMessage('TRIP_DEPARTURE', (msg) => {
+        this.addWsLog(`🚗 行程已出发: ${msg.tripId || msg.data?.tripId}`)
+      }))
+      this.unsubList.push(onMessage('TRIP_ARRIVAL', (msg) => {
+        this.addWsLog(`🏁 行程已到达: ${msg.tripId || msg.data?.tripId}`)
+      }))
+      this.unsubList.push(onMessage('APPLY_STATUS_CHANGED', (msg) => {
+        this.addWsLog(`📝 申请状态变更: ${JSON.stringify(msg)}`)
+        if (this.isDriver) this.loadDriverTrips()
+      }))
+    },
+
+    // 解析消息并添加到 receivedMessages（乘客端展示用）
+    parseAndAddMessage(msg) {
+      const type = msg.type
+      let title = ''
+      let startPlace = ''
+      let endPlace = ''
+      let departTime = ''
+      let message = ''
+      let extra = ''
+
+      if (type === 'TEST_REPLY') {
+        title = '📨 后端回复'
+        const data = msg.data || {}
+        const echo = data.echo || {}
+        startPlace = echo.startPlace || '未知'
+        endPlace = echo.endPlace || '未知'
+        departTime = echo.departTime ? this.formatDateTime(echo.departTime) : '未提供'
+        message = data.msg || '无附加信息'
+        extra = echo.content ? `司机说：${echo.content}` : ''
+      }
+      else if (type === 'TRIP_DEPARTURE') {
+        title = '🚗 司机已出发'
+        startPlace = msg.startPlace || msg.data?.startPlace || ''
+        endPlace = msg.endPlace || msg.data?.endPlace || ''
+        departTime = msg.departTime || msg.data?.departTime ? this.formatDateTime(msg.departTime || msg.data?.departTime) : ''
+        message = msg.message || msg.data?.message || '我们出发啦！'
+      }
+      else if (type === 'TRIP_ARRIVAL') {
+        title = '🏁 司机已到达'
+        startPlace = msg.startPlace || msg.data?.startPlace || ''
+        endPlace = msg.endPlace || msg.data?.endPlace || ''
+        departTime = msg.departTime || msg.data?.departTime ? this.formatDateTime(msg.departTime || msg.data?.departTime) : ''
+        message = msg.message || msg.data?.message || '已到达目的地'
+      }
+      else if (type === 'APPLY_STATUS_CHANGED') {
+        title = '📝 申请状态变更'
+        const status = msg.applyStatus || msg.data?.applyStatus
+        message = status === 1 ? '你的乘车申请已被批准' : (status === 2 ? '你的乘车申请已被拒绝' : '状态未知')
+      }
+      else {
+        // 未知类型，可选不展示或展示原始信息
+        return
+      }
+
+      // 添加到列表顶部
+      this.receivedMessages.unshift({
+        title,
+        startPlace,
+        endPlace,
+        departTime,
+        message,
+        extra,
+        time: new Date().toLocaleTimeString()
+      })
+      // 保留最近30条
+      if (this.receivedMessages.length > 30) this.receivedMessages.pop()
+    },
+
+    addWsLog(content) {
+      const time = new Date().toLocaleTimeString()
+      this.wsMessages.unshift({ time, content })
+      if (this.wsMessages.length > 20) this.wsMessages.pop()
+    },
+
+    sendTestMessage() {
+      if (!this.wsConnected) {
+        uni.showToast({ title: 'WebSocket 未连接', icon: 'none' })
+        return
+      }
+      const myUserId = uni.getStorageSync('userId') || 146
+      
+      let startPlace = '测试出发地'
+      let endPlace = '测试目的地'
+      let departTime = Date.now()
+      if (this.tripList.length > 0 && this.tripList[0].userGetMyTripList) {
+        const trip = this.tripList[0].userGetMyTripList
+        startPlace = trip.startPlace || startPlace
+        endPlace = trip.endPlace || endPlace
+        departTime = trip.departTime || departTime
+      }
+      
+      const success = sendMessage('TEST_MESSAGE', {
+        targetUserId: myUserId,
+        content: `Hello from 司机端! 时间: ${Date.now()}`,
+        from: 'massage-page',
+        startPlace: startPlace,
+        endPlace: endPlace,
+        departTime: departTime
+      })
+      if (success) {
+        this.addWsLog(`发送测试消息给 ${myUserId}，行程：${startPlace} → ${endPlace}，出发时间：${this.formatDateTime(departTime)}`)
+        uni.showToast({ title: '测试消息已发送', icon: 'success' })
+      } else {
+        uni.showToast({ title: '发送失败', icon: 'none' })
+      }
+    },
+
+    // ========== 原有业务方法 ==========
+    toggleTrip(tripId) {
+      const current = this.expandedTrips[tripId]
+      this.$set(this.expandedTrips, tripId, !current)
+    },
+
     async loadData() {
       this.loading = true
       try {
@@ -281,7 +500,6 @@ export default {
       }
     },
 
-    // 司机：获取行程及乘客申请列表
     async loadDriverTrips() {
       console.log('=== 开始请求司机数据 ===')
       const res = await request({
@@ -289,20 +507,14 @@ export default {
         method: 'GET'
       })
       console.log('=== 返回结果 ===', JSON.stringify(res))
-      console.log('res.code:', res.code)
-      console.log('res.data:', res.data)
-      console.log('res.data length:', res.data ? res.data.length : 'null')
-      
       if (res.code !== 0) {
         uni.showToast({ title: res.msg || '获取数据失败', icon: 'none' })
         this.tripList = []
         return
       }
       this.tripList = JSON.parse(JSON.stringify(res.data || []))
-      console.log('=== tripList 赋值后 ===', this.tripList.length)
     },
-    
-    // 乘客：加载行程详情和通知列表
+
     async loadPassengerData() {
       if (!this.tripId) {
         const cached = uni.getStorageSync('currentTripId')
@@ -332,7 +544,6 @@ export default {
       }
     },
 
-    // 乘客确认上车
     async confirmBoarding() {
       if (this.sending) return
       uni.showModal({
@@ -362,7 +573,6 @@ export default {
       })
     },
 
-    // 司机：批准乘客申请
     async approveConsumer(consumer, tripId) {
       uni.showModal({
         title: '确认行程',
@@ -374,7 +584,6 @@ export default {
       })
     },
 
-    // 司机：拒绝乘客申请
     async rejectConsumer(consumer, tripId) {
       uni.showModal({
         title: '拒绝申请',
@@ -386,7 +595,6 @@ export default {
       })
     },
 
-    // 更新申请状态
     async updateConsumerStatus(consumer, tripId, status) {
       this.sending = true
       try {
@@ -411,6 +619,31 @@ export default {
       } finally {
         this.sending = false
       }
+    },
+
+    openDriverFlow(trip, consumer) {
+      if (!trip || !consumer) return
+      if (consumer.status === null || consumer.status === 0) {
+        uni.showToast({ title: '请先确认行程', icon: 'none' })
+        return
+      }
+      const actionType = trip.status >= 4 ? 'arrival' : 'departure'
+      const pageUrl = actionType === 'arrival'
+        ? '/pages/driver/confirm-arrival'
+        : '/pages/driver/driving'
+      const query = [
+        `tripId=${trip.tripId || trip.id || ''}`,
+        `actionType=${actionType}`,
+        `startPlace=${encodeURIComponent(trip.startPlace || consumer.startPlace || '')}`,
+        `endPlace=${encodeURIComponent(trip.endPlace || consumer.endPlace || '')}`,
+        `driverName=${encodeURIComponent(trip.driverName || trip.userName || '')}`,
+        `consumerName=${encodeURIComponent(consumer.username || '')}`,
+        `consumerId=${consumer.userId || ''}`,
+        `consumerPhone=${encodeURIComponent(consumer.mobile || consumer.phone || '')}`,
+        `consumerMessage=${encodeURIComponent(consumer.message || '')}`,
+        `consumerPrice=${consumer.price || ''}`
+      ].join('&')
+      uni.navigateTo({ url: `${pageUrl}?${query}` })
     },
 
     formatDateTime(timestamp) {
@@ -488,34 +721,6 @@ export default {
   background: #ffffff;
   border-radius: 16rpx;
   padding: 6rpx;
-}/* 行程头部可点击 */
-.trip-header {
-  cursor: pointer;
-  margin-bottom: 0;
-}
-.trip-meta {
-  display: flex;
-  align-items: center;
-  gap: 24rpx;
-  padding: 12rpx 0;
-  border-top: 1rpx solid #f1f5f9;
-  margin-top: 12rpx;
-}
-.apply-count {
-  margin-left: auto;
-  color: #3b82f6;
-  font-weight: 600;
-}
-.expand-icon {
-  font-size: 20rpx;
-  color: #94a3b8;
-}
-
-/* 下拉容器 */
-.consumer-dropdown {
-  margin-top: 16rpx;
-  padding-top: 16rpx;
-  border-top: 2rpx dashed #f1f5f9;
 }
 .role-tab {
   flex: 1;
@@ -557,6 +762,66 @@ export default {
   color: #111827;
 }
 .label-icon { font-size: 30rpx; }
+
+/* ========== 实时消息卡片（乘客专用） ========== */
+.msg-card {
+  border-left: 8rpx solid #3b82f6;
+}
+.badge {
+  background-color: #3b82f6;
+  color: white;
+  border-radius: 20rpx;
+  padding: 4rpx 12rpx;
+  font-size: 22rpx;
+  margin-left: 12rpx;
+}
+.empty-msg {
+  text-align: center;
+  padding: 40rpx 0;
+  color: #94a3b8;
+  font-size: 26rpx;
+}
+.msg-list {
+  max-height: 500rpx;
+  overflow-y: auto;
+}
+.msg-item {
+  border-bottom: 1rpx solid #f1f5f9;
+  padding: 20rpx 0;
+}
+.msg-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+.msg-type {
+  font-size: 26rpx;
+  font-weight: 700;
+  color: #1e293b;
+}
+.msg-time {
+  font-size: 22rpx;
+  color: #94a3b8;
+}
+.msg-body {
+  margin-left: 16rpx;
+}
+.msg-row {
+  display: flex;
+  margin-bottom: 8rpx;
+  font-size: 24rpx;
+}
+.msg-row .label {
+  width: 140rpx;
+  color: #64748b;
+  flex-shrink: 0;
+}
+.msg-row .value {
+  flex: 1;
+  color: #334155;
+  word-break: break-all;
+}
 
 /* ========== 乘客行程卡片 ========== */
 .route-line {
@@ -703,7 +968,8 @@ export default {
   margin-bottom: 24rpx;
 }
 .trip-header {
-  margin-bottom: 16rpx;
+  margin-bottom: 0;
+  cursor: pointer;
 }
 .trip-route {
   display: flex;
@@ -722,15 +988,29 @@ export default {
 }
 .trip-meta {
   display: flex;
+  align-items: center;
   gap: 24rpx;
   padding: 12rpx 0;
   border-top: 1rpx solid #f1f5f9;
-  border-bottom: 1rpx solid #f1f5f9;
-  margin-bottom: 16rpx;
+  margin-top: 12rpx;
 }
 .trip-meta .meta {
   font-size: 24rpx;
   color: #64748b;
+}
+.apply-count {
+  margin-left: auto;
+  color: #3b82f6;
+  font-weight: 600;
+}
+.expand-icon {
+  font-size: 20rpx;
+  color: #94a3b8;
+}
+.consumer-dropdown {
+  margin-top: 16rpx;
+  padding-top: 16rpx;
+  border-top: 2rpx dashed #f1f5f9;
 }
 .list-title {
   font-size: 28rpx;
@@ -746,6 +1026,11 @@ export default {
 .consumer-item {
   border-bottom: 1rpx solid #f1f5f9;
   padding: 20rpx 0;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+.consumer-item:active {
+  transform: scale(0.99);
+  background: #f8fafc;
 }
 .consumer-header {
   display: flex;
@@ -790,6 +1075,9 @@ export default {
   gap: 16rpx;
   margin-top: 16rpx;
 }
+.consumer-item .apply-actions {
+  margin-top: 14rpx;
+}
 .action-btn {
   flex: 1;
   height: 68rpx;
@@ -823,6 +1111,51 @@ export default {
 .result-text.rejected {
   background: #fee2e2;
   color: #dc2626;
+}
+
+/* ========== WebSocket 测试卡片（司机专用） ========== */
+.ws-test-card {
+  background: #f8fafc;
+  border-left: 8rpx solid #3b82f6;
+}
+.ws-status {
+  margin-bottom: 20rpx;
+  font-size: 28rpx;
+}
+.status-on { color: #22c55e; font-weight: bold; }
+.status-off { color: #ef4444; font-weight: bold; }
+.ws-btn {
+  background: #3b82f6;
+  color: white;
+  border-radius: 40rpx;
+  font-size: 28rpx;
+  margin: 16rpx 0;
+}
+.ws-btn[disabled] { background: #94a3b8; }
+.ws-log {
+  margin-top: 20rpx;
+  border-top: 1rpx solid #e2e8f0;
+  padding-top: 12rpx;
+}
+.log-title {
+  font-size: 24rpx;
+  color: #64748b;
+  margin-bottom: 8rpx;
+}
+.log-scroll {
+  max-height: 300rpx;
+}
+.log-item {
+  font-size: 22rpx;
+  padding: 6rpx 0;
+  border-bottom: 1rpx dashed #e2e8f0;
+}
+.log-time {
+  color: #94a3b8;
+  margin-right: 16rpx;
+}
+.log-content {
+  color: #1e293b;
 }
 
 /* ========== Footer ========== */

@@ -43,6 +43,26 @@
         </view>
       </view>
 
+      <view class="card info-card" v-if="consumerName || consumerId || consumerPhone || consumerPrice !== ''">
+        <view class="card-title">乘客信息</view>
+        <view class="info-row">
+          <text class="label">乘客</text>
+          <text class="value">{{ consumerName || '-' }}</text>
+        </view>
+        <view class="info-row">
+          <text class="label">乘客ID</text>
+          <text class="value">{{ consumerId || '-' }}</text>
+        </view>
+        <view class="info-row" v-if="consumerPhone">
+          <text class="label">手机号</text>
+          <text class="value">{{ consumerPhone }}</text>
+        </view>
+        <view class="info-row" v-if="consumerPrice !== '' && consumerPrice !== null">
+          <text class="label">乘客价格</text>
+          <text class="value">￥{{ consumerPrice }}</text>
+        </view>
+      </view>
+
       <view class="card message-card">
         <view class="card-title">给乘客的留言</view>
         <textarea
@@ -96,6 +116,11 @@ export default {
       startPlace: '',
       endPlace: '',
       driverName: '',
+      consumerName: '',
+      consumerId: '',
+      consumerPhone: '',
+      consumerMessage: '',
+      consumerPrice: '',
       routeDetail: {},
       messageText: '',
       sending: false,
@@ -119,8 +144,8 @@ export default {
     },
     confirmDesc() {
       return this.actionType === 'arrival'
-        ? '此操作将标记行程为“已到达”。'
-        : '此操作将标记行程为“已出发”。'
+        ? '此操作将标记行程为"已到达"。'
+        : '此操作将标记行程为"已出发"。'
     },
     statusText() {
       return this.statusTextByTripStatus(this.routeDetail.status)
@@ -148,6 +173,11 @@ export default {
     this.startPlace = options.startPlace ? decodeURIComponent(options.startPlace) : ''
     this.endPlace = options.endPlace ? decodeURIComponent(options.endPlace) : ''
     this.driverName = options.driverName ? decodeURIComponent(options.driverName) : ''
+    this.consumerName = options.consumerName ? decodeURIComponent(options.consumerName) : ''
+    this.consumerId = options.consumerId ? String(options.consumerId) : ''
+    this.consumerPhone = options.consumerPhone ? decodeURIComponent(options.consumerPhone) : ''
+    this.consumerMessage = options.consumerMessage ? decodeURIComponent(options.consumerMessage) : ''
+    this.consumerPrice = options.consumerPrice ? Number(options.consumerPrice) : ''
     this.messageText = uni.getStorageSync(this.draftKey()) || this.defaultMessage()
     this.loadRouteDetail()
   },

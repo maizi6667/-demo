@@ -60,6 +60,8 @@
 </template>
 
 <script>
+import { connect } from '@/utils/tripWebSocket.js'
+
 export default {
   data() {
     return {
@@ -152,9 +154,7 @@ export default {
           
           console.log('响应数据:', res.data)
           
-          // 根据返回的数据结构调整
           if (res.statusCode === 200 && res.data) {
-            // 判断 code === 0 表示成功
             if (res.data.code === 0 && res.data.data) {
               const data = res.data.data
               const accessToken = data.accessToken
@@ -185,6 +185,10 @@ export default {
                 })
                 
                 console.log('登录成功，accessToken:', accessToken)
+                
+                // === 关键：登录成功后建立 WebSocket 连接 ===
+                connect()  // 调用 tripWebSocket.js 中的 connect，不再自己实现
+                
               } catch (e) {
                 console.error('存储失败', e)
               }
